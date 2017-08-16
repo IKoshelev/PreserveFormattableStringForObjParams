@@ -20,7 +20,7 @@ Before:
         }
 ```
 
-After fix application
+After fix application:
 ```cs
         public void Bar()
         {
