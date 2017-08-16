@@ -15,36 +15,183 @@ namespace PreserveFormattableStringForObjParams
     {
         public const string DiagnosticId = "PreserveFormattableStringForObjParams";
 
-        // You can change these strings in the Resources.resx file. If you do not want your analyzer to be localize-able, you can use regular strings for Title and MessageFormat.
-        // See https://github.com/dotnet/roslyn/blob/master/docs/analyzers/Localizing%20Analyzers.md for more on localization
-        private static readonly LocalizableString Title = new LocalizableResourceString(nameof(Resources.AnalyzerTitle), Resources.ResourceManager, typeof(Resources));
-        private static readonly LocalizableString MessageFormat = new LocalizableResourceString(nameof(Resources.AnalyzerMessageFormat), Resources.ResourceManager, typeof(Resources));
-        private static readonly LocalizableString Description = new LocalizableResourceString(nameof(Resources.AnalyzerDescription), Resources.ResourceManager, typeof(Resources));
-        private const string Category = "Naming";
+        public static readonly string Title = "An Interpolated string ($\"...\") is cast to normal string " +
+            "during argument passing. This will lose information about raw data value. " +
+            "Raw values should be preserved by passing it as FormattableString.";
 
-        private static DiagnosticDescriptor Rule = new DiagnosticDescriptor(DiagnosticId, Title, MessageFormat, Category, DiagnosticSeverity.Warning, isEnabledByDefault: true, description: Description);
+        public static readonly string MessageFormat = 
+            "Raw data values from interpolated string are lost due to cast to an object.";
+
+        public static readonly string Description = "An interpolated string is being passed to an 'object' parameter, " +
+            "this will cast it to a normal string and lose information about raw data values." +
+            "Raw values should be preserved by passing it as FormattableString.";
+
+        private const string Category = "FormattableString";
+
+        private static DiagnosticDescriptor Rule = 
+            new DiagnosticDescriptor(DiagnosticId, 
+                Title, 
+                MessageFormat, 
+                Category, 
+                DiagnosticSeverity.Error, 
+                isEnabledByDefault: true, 
+                description: Description);
 
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get { return ImmutableArray.Create(Rule); } }
 
         public override void Initialize(AnalysisContext context)
         {
-            // TODO: Consider registering other actions that act on syntax instead of or in addition to symbols
-            // See https://github.com/dotnet/roslyn/blob/master/docs/analyzers/Analyzer%20Actions%20Semantics.md for more information
-            context.RegisterSymbolAction(AnalyzeSymbol, SymbolKind.NamedType);
+            context.RegisterSymbolAction(AnalyzeSymbol, SymbolKind.Method);
         }
 
         private static void AnalyzeSymbol(SymbolAnalysisContext context)
         {
-            // TODO: Replace the following code with your own analysis, generating Diagnostic objects for any issues you find
-            var namedTypeSymbol = (INamedTypeSymbol)context.Symbol;
+            var methodSymbol = (IMethodSymbol)context.Symbol;
 
-            // Find just those named type symbols with names containing lowercase letters.
-            if (namedTypeSymbol.Name.ToCharArray().Any(char.IsLower))
+            var syntaxReference = context.Symbol.DeclaringSyntaxReferences.Single();
+
+            var declaringNode = syntaxReference
+                                    .SyntaxTree
+                                    .GetRoot()
+                                    .FindNode(syntaxReference.Span) as MethodDeclarationSyntax;
+
+            var semanticModel = context.Compilation.GetSemanticModel(syntaxReference.SyntaxTree);
+
+            var inlineInterpolatedStringParameters =
+                    declaringNode.DescendantNodes()
+                                 .OfType<InvocationExpressionSyntax>()
+                                 .Select(node => new SuspectArguments(                                                    
+                                                    GetInterpolatedStringArgumentPositions(node).ToArray(),
+                                                    node))
+                                 .Where(suspect => suspect.AgrPositions.Any())
+                                 .ToArray();
+
+            if(inlineInterpolatedStringParameters.Any() == false)
             {
+                return;
+            }
+
+            var verifiedObjectConversions =
+                inlineInterpolatedStringParameters
+                    .Select(x => FilterForInterpolatedStringsConvertedToObject(x, semanticModel))
+                    .Where(suspect => suspect.AgrPositions.Any())
+                    .ToArray();
+
+            foreach(var suspect in verifiedObjectConversions)
+            foreach(var argPosition in suspect.AgrPositions)
+            {
+                var arg = suspect.Node.ArgumentList.Arguments[argPosition];
                 // For all such symbols, produce a diagnostic.
-                var diagnostic = Diagnostic.Create(Rule, namedTypeSymbol.Locations[0], namedTypeSymbol.Name);
+
+                var diagnostic = Diagnostic.Create(
+                                                Rule,
+                                                arg.GetLocation());
 
                 context.ReportDiagnostic(diagnostic);
+            }
+        }
+
+        private class SuspectArguments
+        {
+            public int[] AgrPositions { get; private set; }
+            public InvocationExpressionSyntax Node { get; private set; }
+
+            public SuspectArguments(int[] argPositions, InvocationExpressionSyntax node)
+            {
+                AgrPositions = argPositions;
+                Node = node;
+            }
+        }
+
+        private static SuspectArguments FilterForInterpolatedStringsConvertedToObject(
+            SuspectArguments susect,
+            SemanticModel semanticModel)
+        {
+            var methodInfo = semanticModel.GetSymbolInfo(susect.Node).Symbol as IMethodSymbol;
+            
+            if(methodInfo == null)
+            {
+                return new SuspectArguments(new int[0], susect.Node);
+            }
+
+            var parameters = methodInfo.Parameters.ToArray();
+            var arguments = susect.Node.ArgumentList.Arguments.ToArray();
+            var confirmedArgConversionPositions = new List<int>();
+                
+            for(int count = 0; count < arguments.Length; count++)
+            {
+                var argument = arguments[count];
+                IParameterSymbol param;
+                if(TryGetNameOfAgrumentPassedByName(argument, out string name))
+                {
+                    param = parameters.Where(x => x.Name == name).Single();
+                }
+                else
+                {
+                    param = parameters.ElementAt(count);
+                }
+
+                if(ArgumentWillBeConvertedToString(param, argument))
+                {
+                    confirmedArgConversionPositions.Add(count);
+                }
+            }
+
+            return new SuspectArguments(
+                confirmedArgConversionPositions.ToArray(), 
+                susect.Node);
+        }
+
+        private static bool ArgumentWillBeConvertedToString(IParameterSymbol param, ArgumentSyntax arg)
+        {
+            // naive check to for casts and 'as' clauses
+            var formattableStringIsMentioned = arg
+                        .DescendantTokens()
+                        .Where(x => x.Kind() == SyntaxKind.IdentifierToken)
+                        .Any(x => x.Text.ToString().Trim() == "FormattableString");
+
+            if (formattableStringIsMentioned)
+            {
+                return false;
+            }
+
+            if (param.Type.ContainingNamespace.Name == "System"
+                && param.Type.Name == "Object")
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryGetNameOfAgrumentPassedByName(ArgumentSyntax arg, out string name)
+        {
+            var nameClause = arg.NameColon?.GetText().ToString().Replace(":", "").Trim();
+            if (string.IsNullOrWhiteSpace(nameClause))
+            {
+                name = null;
+                return false;
+            }
+
+            name = nameClause;
+            return true;
+        }
+
+        private static IEnumerable<int> GetInterpolatedStringArgumentPositions(InvocationExpressionSyntax invocation)
+        {
+            var arguments = invocation.ArgumentList.Arguments.ToArray();
+
+            for (int count = 0; count < arguments.Length; count++)
+            {
+                var argument = arguments[count];
+                var containsInterpolatedString = 
+                                    argument.ChildNodes()
+                                            .Any(node => node is InterpolatedStringExpressionSyntax);
+
+                if (containsInterpolatedString)
+                {
+                    yield return count;
+                }
             }
         }
     }

@@ -12,13 +12,14 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Rename;
 using Microsoft.CodeAnalysis.Text;
+using SF = Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
 
 namespace PreserveFormattableStringForObjParams
 {
     [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(PreserveFormattableStringForObjParamsCodeFixProvider)), Shared]
     public class PreserveFormattableStringForObjParamsCodeFixProvider : CodeFixProvider
     {
-        private const string title = "Make uppercase";
+        private const string title = "Add explicit cast to preserver FormattableString";
 
         public sealed override ImmutableArray<string> FixableDiagnosticIds
         {
@@ -27,47 +28,59 @@ namespace PreserveFormattableStringForObjParams
 
         public sealed override FixAllProvider GetFixAllProvider()
         {
-            // See https://github.com/dotnet/roslyn/blob/master/docs/analyzers/FixAllProvider.md for more information on Fix All Providers
             return WellKnownFixAllProviders.BatchFixer;
         }
 
         public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
         {
-            var root = await context.Document.GetSyntaxRootAsync(context.CancellationToken).ConfigureAwait(false);
+            var root = await context.Document
+                                  .GetSyntaxRootAsync(context.CancellationToken)
+                                  .ConfigureAwait(false);
 
-            // TODO: Replace the following code with your own analysis, generating a CodeAction for each fix to suggest
             var diagnostic = context.Diagnostics.First();
             var diagnosticSpan = diagnostic.Location.SourceSpan;
 
-            // Find the type declaration identified by the diagnostic.
-            var declaration = root.FindToken(diagnosticSpan.Start).Parent.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().First();
+            var argument = root.FindToken(diagnosticSpan.Start)
+                                    .Parent.AncestorsAndSelf()
+                                    .OfType<ArgumentSyntax>().First();
 
-            // Register a code action that will invoke the fix.
             context.RegisterCodeFix(
                 CodeAction.Create(
                     title: title,
-                    createChangedSolution: c => MakeUppercaseAsync(context.Document, declaration, c),
+                    createChangedSolution: c => AddExplicitCastToFormattableString(context.Document, argument, c),
                     equivalenceKey: title),
                 diagnostic);
         }
 
-        private async Task<Solution> MakeUppercaseAsync(Document document, TypeDeclarationSyntax typeDecl, CancellationToken cancellationToken)
+        private async Task<Solution> AddExplicitCastToFormattableString(
+                                                            Document document, 
+                                                            ArgumentSyntax argument, 
+                                                            CancellationToken cancellationToken)
         {
-            // Compute new uppercase name.
-            var identifierToken = typeDecl.Identifier;
-            var newName = identifierToken.Text.ToUpperInvariant();
+            var interpolatedStrings = argument
+                                        .DescendantNodes()
+                                        .OfType<InterpolatedStringExpressionSyntax>()
+                                        .ToArray();
 
-            // Get the symbol representing the type to be renamed.
-            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
-            var typeSymbol = semanticModel.GetDeclaredSymbol(typeDecl, cancellationToken);
+            var currentArgument = argument;
+            var FormattedStringTypeIdentifier = SF.IdentifierName("FormattableString");
 
-            // Produce a new solution that has all references to that type renamed, including the declaration.
-            var originalSolution = document.Project.Solution;
-            var optionSet = originalSolution.Workspace.Options;
-            var newSolution = await Renamer.RenameSymbolAsync(document.Project.Solution, typeSymbol, newName, optionSet, cancellationToken).ConfigureAwait(false);
+            foreach (var currentStirng in interpolatedStrings)
+            {
+                var syntaxtWithCast = SF.CastExpression(FormattedStringTypeIdentifier, currentStirng);
+                currentArgument = currentArgument.ReplaceNode(currentStirng, syntaxtWithCast);
+            }
 
-            // Return the new solution with the now-uppercase type name.
+            var root = await document.GetSyntaxRootAsync();
+
+            var newRoot = root.ReplaceNode(argument, currentArgument);
+
+            var newSolution = document.Project.Solution
+                                              .RemoveDocument(document.Id)
+                                              .AddDocument(document.Id, document.Name, newRoot);
+
             return newSolution;
+
         }
     }
 }
