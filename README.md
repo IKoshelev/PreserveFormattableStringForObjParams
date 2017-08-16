@@ -12,7 +12,7 @@ Before:
         public void Bar()
         {
             // Compiler will give you an error
-            Foo($""abc{1}"", obj2 : $""abc{2}"");
+            Foo($"abc{1}", obj2 : $"abc{2}");
         }
 
         public void Foo(object obj, object obj2)
@@ -24,10 +24,11 @@ After fix application
 ```cs
         public void Bar()
         {
-            Foo((FormattableString)$""abc{1}"", obj2 : (FormattableString)$""abc{2}"");
+            Foo((FormattableString)$"abc{1}", obj2 : (FormattableString)$"abc{2}");
         }
 
         public void Foo(object obj, object obj2)
         {
+                // arguments of both strings can be examined
         }
 ```
