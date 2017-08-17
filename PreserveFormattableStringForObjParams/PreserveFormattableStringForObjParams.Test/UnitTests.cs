@@ -218,6 +218,82 @@ namespace ConsoleApplication1
             VerifyCSharpFix(test, fixtest);
         }
 
+        [TestMethod]
+        public void InerpolatedStringPassedAsObjToParamsIsError()
+        {
+            var test = @"
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Diagnostics;
+
+namespace ConsoleApplication1
+{
+    class TypeName
+    {
+        public void Bar()
+        {
+            Foo($""abc{1}"", $""abc{2}"");
+        }
+
+        public void Foo(params object[] obj)
+        {
+        }
+    }
+}";
+
+            var expected1 = new DiagnosticResult
+            {
+                Id = "PreserveFormattableStringForObjParams",
+                Message = PreserveFormattableStringForObjParamsAnalyzer.MessageFormat,
+                Severity = DiagnosticSeverity.Error,
+                Locations = new[]
+                {
+                                new DiagnosticResultLocation("Test0.cs", 15, 17)
+                            }
+            };
+
+            var expected2 = new DiagnosticResult
+            {
+                Id = "PreserveFormattableStringForObjParams",
+                Message = PreserveFormattableStringForObjParamsAnalyzer.MessageFormat,
+                Severity = DiagnosticSeverity.Error,
+                Locations = new[]
+                            {
+                                new DiagnosticResultLocation("Test0.cs", 15, 28)
+                            }
+            };
+
+            VerifyCSharpDiagnostic(test, expected1, expected2);
+
+            var fixtest = @"
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Diagnostics;
+
+namespace ConsoleApplication1
+{
+    class TypeName
+    {
+        public void Bar()
+        {
+            Foo((FormattableString)$""abc{1}"", (FormattableString)$""abc{2}"");
+        }
+
+        public void Foo(params object[] obj)
+        {
+        }
+    }
+}";
+            VerifyCSharpFix(test, fixtest);
+        }
+
+
         protected override CodeFixProvider GetCSharpCodeFixProvider()
         {
             return new PreserveFormattableStringForObjParamsCodeFixProvider();

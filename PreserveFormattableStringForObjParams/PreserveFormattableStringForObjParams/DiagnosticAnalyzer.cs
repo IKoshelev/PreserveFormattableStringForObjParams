@@ -116,15 +116,22 @@ namespace PreserveFormattableStringForObjParams
 
             var parameters = methodInfo.Parameters.ToArray();
             var arguments = susect.Node.ArgumentList.Arguments.ToArray();
+            var functionIsVariadic = parameters.LastOrDefault()?.IsParams ?? false;
             var confirmedArgConversionPositions = new List<int>();
                 
             for(int count = 0; count < arguments.Length; count++)
             {
+                var argumentIsPassedToLastParameter = count >= (parameters.Length - 1);
+
                 var argument = arguments[count];
                 IParameterSymbol param;
                 if(TryGetNameOfAgrumentPassedByName(argument, out string name))
                 {
                     param = parameters.Where(x => x.Name == name).Single();
+                }
+                else if(functionIsVariadic && argumentIsPassedToLastParameter)
+                {
+                    param = parameters.Last();
                 }
                 else
                 {
@@ -155,8 +162,19 @@ namespace PreserveFormattableStringForObjParams
                 return false;
             }
 
-            if (param.Type.ContainingNamespace.Name == "System"
-                && param.Type.Name == "Object")
+            bool ITypeSymbolIsObject(ITypeSymbol typeSymbol)
+            {
+                return typeSymbol.ContainingNamespace.Name == "System"
+                && typeSymbol.Name == "Object";
+            }
+
+            if(param.IsParams 
+                && ITypeSymbolIsObject(((IArrayTypeSymbol)param.Type).ElementType))
+            {
+                return true;
+            }
+
+            if (ITypeSymbolIsObject(param.Type))
             {
                 return true;
             }
