@@ -2,7 +2,16 @@
 Diagnostics analyzer: when interpolated string ($"...") is used as an object, will force it to be cast to FormattableString (this will preserve raw data values and is very useful, for example, when unit testing log messages).
 
 If you don't know about .NET 4.6 type 'FormattableString' - make sure to read a short article:
+
 http://ikoshelev.azurewebsites.net/search/id/9/-Advanced-usage-of-interpolated-strings-in-CSharp
+
+Avaliable as NuGet package: 
+
+https://www.nuget.org/packages/PreserveFormattableStringForObjParamsAnalyzer/1.0.6439.929
+
+Available as VS extension: 
+
+https://marketplace.visualstudio.com/items?itemName=Koshelew.PreserveFormattableStringForObjParams
 
 This analyzer will make sure, that raw values of interpolated string will not be lost due to cast to an object,
 but will instead be preserved by casting it to FormattableString.
